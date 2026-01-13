@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Appointment Scheduling Simulation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .mini { font-size: 0.9rem; }
+    .sticky-actions { position: sticky; bottom: 0; background: white; padding-top: 12px; }
+  </style>
+</head>
+
+<body class="bg-light">
+  <div class="container py-4">
+    <h1 class="mb-2">Appointment Scheduling Simulation</h1>
+    <p class="text-muted mb-4">Minimal inputs up front. Expand Advanced to edit the full model parameters.</p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{category}}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="/run" id="simForm" class="card p-3 shadow-sm">
+      <h5 class="mb-3">Minimal inputs</h5>
+
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label"># Patients</label>
+          <input class="form-control" name="n_patients" type="number" min="1" value="{{ default_cfg.n_patients }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Lambda (patients/week)</label>
+          <input class="form-control" name="lambda_per_week" type="number" step="0.01" min="0.01" value="{{ default_cfg.lambda_per_week }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Max attempts</label>
+          <input class="form-control" name="max_attempts" type="number" min="1" value="{{ default_cfg.max_attempts }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Seed</label>
+          <input class="form-control" name="seed" type="number" value="{{ default_cfg.seed }}" />
+        </div>
+      </div>
+
+      <hr class="my-4" />
+
+      <h5 class="mb-3">Population mix</h5>
+      <div class="row g-3">
+        {% for pop, pdata in default_cfg.populations.items() %}
+          <div class="col-md-3">
+            <label class="form-label">{{ pop }} weight</label>
+            <input
+              class="form-control"
+              name="pop_weight__{{ pop }}"
+              type="number"
+              step="0.001"
+              min="0"
+              value="{{ pdata.weight }}"
+            />
+          </div>
+        {% endfor %}
+      </div>
+
+      <hr class="my-4" />
+
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <button class="btn btn-primary" type="submit">Run simulation</button>
+          <span class="text-muted ms-2">Results will appear immediately after run.</span>
+        </div>
+
+        <button class="btn btn-outline-secondary" type="button" id="toggleAdvanced">
+          Advanced ▼
+        </button>
+      </div>
+
+      <!-- Advanced block -->
+      <div id="advancedBlock" class="mt-4" style="display:none;">
+        <div class="alert alert-info mb-3">
+          Advanced mode edits the full parameter model (methods, probabilities, touchpoints, allocated minutes).
+          <div class="mini mt-1">Probabilities are validated (method likelihoods and visit-category probs must each sum to 1 per population).</div>
+        </div>
+
+        <div id="advError" class="alert alert-danger" style="display:none;"></div>
+
+        <input type="hidden" name="advanced_on" id="advanced_on" value="0" />
+
+        <!-- Hidden fields posted to Flask (JSON) -->
+        <input type="hidden" name="avg_touchpoints_json" id="avg_touchpoints_json" />
+        <input type="hidden" name="allocated_minutes_json" id="allocated_minutes_json" />
+        <input type="hidden" name="population_params_json" id="population_params_json" />
+
+        <div class="row g-3">
+          <div class="col-lg-6">
+            <div class="card p-3 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="m-0">Avg Touchpoints by Method</h6>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="resetTouchpoints">Reset</button>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle" id="touchpointsTable">
+                  <thead>
+                    <tr>
+                      <th style="width:60%;">Method</th>
+                      <th style="width:40%;">Mean touchpoints</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="text-muted mini">Used globally across populations.</div>
+            </div>
+          </div>
+
+          <div class="col-lg-6">
+            <div class="card p-3 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="m-0">Allocated Minutes by Visit Category</h6>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="resetAlloc">Reset</button>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle" id="allocTable">
+                  <thead>
+                    <tr>
+                      <th style="width:60%;">Visit category</th>
+                      <th style="width:40%;">Allocated minutes</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="text-muted mini">Used when a patient draws a visit category.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-3 shadow-sm mt-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="m-0">Population Parameters</h6>
+            <button class="btn btn-sm btn-outline-secondary" type="button" id="resetPopParams">Reset</button>
+          </div>
+          <div class="text-muted mini mt-1">Edit method likelihoods + scheduling/completion parameters, plus visit-category probabilities for each population.</div>
+
+          <div class="mt-3" id="popAccordion"></div>
+
+          <div class="sticky-actions mt-3 d-flex gap-2">
+            <button class="btn btn-outline-primary btn-sm" type="button" id="validateAdvanced">Validate advanced inputs</button>
+            <span id="advOk" class="text-success mini align-self-center" style="display:none;">✓ Looks good</span>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    const DEFAULT_CFG = {{ default_cfg | tojson }};
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
