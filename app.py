@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import io
 import json
-from flask import Flask, render_template, request, send_file, flash, redirect, url_for, session
+import pandas as pd
+from flask import Flask, render_template, request, send_file, flash, redirect, url_for
 
 from simulation import DEFAULT_CONFIG, simulate, summarize
+from db import init_db, save_run, list_runs, get_run
 
 app = Flask(__name__)
 app.secret_key = "dev-secret-change-me"  # change for deployment
+
+init_db()
 
 
 def _safe_float(x, default=0.0):
@@ -62,14 +66,17 @@ def index():
 def run_sim():
     try:
         cfg = build_config_from_form(request.form)
+
         df = simulate(cfg)
         summ = summarize(df)
 
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-        session["latest_csv"] = csv_bytes.decode("latin1")
+        csv_text = df.to_csv(index=False)
+        run_id = save_run(cfg, summ, csv_text)
 
+        # results page shows current run
         return render_template(
             "results.html",
+            run_id=run_id,
             summary=summ,
             preview=df.head(25).to_dict(orient="records"),
             columns=list(df.columns),
@@ -80,18 +87,45 @@ def run_sim():
         return redirect(url_for("index"))
 
 
-@app.get("/download")
-def download_csv():
-    if "latest_csv" not in session:
-        flash("No results to download yet. Run the simulation first.", "warning")
-        return redirect(url_for("index"))
+@app.get("/archive")
+def archive():
+    runs = list_runs(limit=100)
+    return render_template("archive.html", runs=runs)
 
-    csv_bytes = session["latest_csv"].encode("latin1")
+
+@app.get("/archive/<int:run_id>")
+def archive_run(run_id: int):
+    run = get_run(run_id)
+    if not run:
+        flash("Run not found.", "warning")
+        return redirect(url_for("archive"))
+
+    # For preview, read a small chunk of the CSV into a DF
+    df = pd.read_csv(io.StringIO(run["csv_text"]))
+    return render_template(
+        "results.html",
+        run_id=run_id,
+        summary=run["summary"],
+        preview=df.head(25).to_dict(orient="records"),
+        columns=list(df.columns),
+        archived=True,
+        created_at=run["created_at"],
+    )
+
+
+@app.get("/archive/<int:run_id>/download")
+def archive_download(run_id: int):
+    run = get_run(run_id)
+    if not run:
+        flash("Run not found.", "warning")
+        return redirect(url_for("archive"))
+
+    csv_bytes = run["csv_text"].encode("utf-8")
     return send_file(
         io.BytesIO(csv_bytes),
         mimetype="text/csv",
         as_attachment=True,
-        download_name="appt_sim_results.csv",
+        download_name=f"appt_sim_run_{run_id}.csv",
     )
 
 
